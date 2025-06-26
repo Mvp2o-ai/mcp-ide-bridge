@@ -21,10 +21,10 @@
           src="https://img.youtube.com/vi/TA97TGoOMJA/maxresdefault.jpg" 
           alt="MCP IDE Bridge Demo"
           style="
-            border: 5px solid #2196F3; 
+            border: 7px solid #e5534b; 
             border-radius: 14px; 
             padding: 0; 
-            box-shadow: 0 0 24px 4px #2196F3, 0 0 0 4px #fff inset;
+            box-shadow: 0 0 36px 8px #e5534b, 0 0 0 4px #fff inset;
             transition: box-shadow 0.3s;
           "
         >
