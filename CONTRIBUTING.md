@@ -25,7 +25,7 @@ Thank you for your interest in contributing to MCP IDE Bridge!
 
 3. **Install dependencies**
    ```bash
-   pip install -e .
+   pip install -r requirements.txt
    ```
 
 ## 🧪 Testing
@@ -85,6 +85,54 @@ When requesting features, please:
 - Never commit secrets or sensitive data
 - Use environment variables for configuration
 - Report security issues privately to maintainers
+
+## How to Contribute via Fork and Pull Request
+
+1. **Fork the repository**
+   - Click the 'Fork' button on GitHub and clone your fork locally.
+
+2. **Sync with upstream**
+   - Add the main repo as upstream:
+     ```sh
+     git remote add upstream git@github.com:Mvp2o-ai/mcp-ide-bridge.git
+     ```
+   - Periodically sync your fork:
+     ```sh
+     git fetch upstream
+     git checkout main
+     git merge upstream/main
+     git push origin main
+     ```
+
+3. **Create a feature branch**
+   - Never work directly on `main`.
+   - Create a branch for your feature or fix:
+     ```sh
+     git checkout -b feature/short-description
+     ```
+
+4. **Commit and push your changes**
+   - Commit with clear messages.
+   - Push to your fork:
+     ```sh
+     git push --set-upstream origin feature/short-description
+     ```
+
+5. **Open a Pull Request**
+   - Go to your fork on GitHub and click 'Compare & pull request'.
+   - Set the base repo to `Mvp2o-ai/mcp-ide-bridge` and base branch to `main`.
+   - Set the compare branch to your feature branch.
+   - Fill in a descriptive title and summary.
+
+6. **PR Etiquette**
+   - Keep PRs focused and small if possible.
+   - Reference related issues if applicable.
+   - Be responsive to review feedback.
+
+7. **After merge**
+   - Sync your fork's main branch with upstream as above.
+
+Thank you for contributing to open source!
 
 ---
 

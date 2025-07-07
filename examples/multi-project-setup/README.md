@@ -316,27 +316,25 @@ Your IDE's AI agent can help generate `mcp_recipients.json` files! Simply ask:
 ### Backend API → Frontend Web App
 ```bash
 # Backend developer notifies frontend about API changes
-send_message_and_wait("mybackendapi_cursor", "myfrontendweb_vscode", "I've updated the user authentication endpoint. New fields: user_id, email, role")
+send_message_without_waiting("mybackendapi_cursor", ["myfrontendweb_vscode"], ["I've updated the user authentication endpoint. New fields: user_id, email, role"])
 ```
 
 ### Frontend Web App → Project Specs
 ```bash
 # Frontend developer requests specification clarification
-send_message_and_wait("myfrontendweb_vscode", "projectspecs_claudedesktop", "Need clarification on the user dashboard layout requirements")
+send_message_without_waiting("myfrontendweb_vscode", ["projectspecs_claudedesktop"], ["Need clarification on the user dashboard layout requirements"])
 ```
 
 ### RAG Project → Backend API
 ```bash
 # RAG developer requests API integration
-send_message_and_wait("myragproject_windsurf", "mybackendapi_cursor", "Need to integrate RAG search with your API. Can you add a /search endpoint?")
+send_message_without_waiting("myragproject_windsurf", ["mybackendapi_cursor"], ["Need to integrate RAG search with your API. Can you add a /search endpoint?"])
 ```
 
 ### DevOps → All Projects
 ```bash
 # DevOps announces deployment
-send_message_and_wait("mydevops_jetbrains", "mybackendapi_cursor", "Production deployment scheduled for 2 PM. Please ensure API is ready.")
-send_message_and_wait("mydevops_jetbrains", "myfrontendweb_vscode", "Production deployment scheduled for 2 PM. Please ensure frontend is ready.")
-send_message_and_wait("mydevops_jetbrains", "myragproject_windsurf", "Production deployment scheduled for 2 PM. Please ensure RAG is ready.")
+send_message_without_waiting("mydevops_jetbrains", ["mybackendapi_cursor", "myfrontendweb_vscode", "myragproject_windsurf"], ["Production deployment scheduled for 2 PM. Please ensure your components are ready."])
 ```
 
 ## 🚀 Benefits of Multi-Project IDE Communication

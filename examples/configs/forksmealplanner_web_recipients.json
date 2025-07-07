@@ -7,7 +7,7 @@
     }
   },
   "server_info": {
-    "url": "http://localhost:8123/mcp/",
+    "url": "http://localhost:8111/mcp/",
     "transport": "http_streamable",
     "description": "MCP HTTP Streamable messaging server for cross-project collaboration"
   }

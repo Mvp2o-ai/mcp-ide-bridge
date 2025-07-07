@@ -1,38 +1,39 @@
 {
-  "my_id": "myproject_cursor",
+  "my_sender_id": "mcp_messaging_server",
+  "my_name": "MCP IDE Bridge",
+  "my_description": "MCP IDE Bridge for client-to-client communication",
   "recipients": {
-    "myfrontendweb_vscode": {
-      "name": "Frontend Web App",
-      "description": "React frontend project in VS Code"
+    "cursor_ide": {
+      "name": "Cursor IDE",
+      "description": "Cursor IDE instance"
     },
-    "mybackendapi_cursor": {
-      "name": "Backend API",
-      "description": "Node.js/Express backend in Cursor"
+    "vscode_ide": {
+      "name": "VS Code IDE",
+      "description": "VS Code IDE instance"
     },
-    "myragproject_windsurf": {
-      "name": "RAG Project",
-      "description": "RAG implementation project in Windsurf"
+    "claude_desktop": {
+      "name": "Claude Desktop",
+      "description": "Claude Desktop application"
     },
-    "mydevops_jetbrains": {
-      "name": "DevOps Project",
-      "description": "Infrastructure project in JetBrains"
+    "windsurf_ide": {
+      "name": "Windsurf IDE",
+      "description": "Windsurf IDE instance"
     },
-    "projectspecs_claudedesktop": {
-      "name": "Project Specifications",
-      "description": "Project docs and specs in Claude Desktop"
-    }
-  },
-  "server_info": {
-    "url": "http://localhost:8111/mcp/",
-    "transport": "http_streamable"
-  },
-  "message_config": {
-    "max_tokens": 4096,
-    "max_iterations": 10,
-    "timeouts": {
-      "send_message_and_wait": 180.0,
-      "get_messages": 60.0,
-      "message_expiration": 300.0
+    "dyson_frontend": {
+      "name": "Dyson Frontend",
+      "description": "Front end SaaS platform for the AI powered SaaS platform"
+    },
+    "mcpresearchserver": {
+      "name": "MCP Research Server",
+      "description": "Research and analysis server for enhanced AI capabilities"
+    },
+    "miles_mcp_server": {
+      "name": "Miles MCP Server",
+      "description": "Main MCP server for orchestration and coordination"
+    },  
+    "milesdyson_memory": {
+      "name": "Memory Server",
+      "description": "Human memory server for MilesDyson"
     }
   }
 } 

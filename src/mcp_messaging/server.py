@@ -13,7 +13,9 @@ import httpx
 import uvicorn
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
 from starlette.responses import JSONResponse
+# Removed pydantic BaseModel - no longer needed
 
 from .models import Message, format_relative_time
 from .queue_backends import QueueBackend, InMemoryQueueBackend
@@ -39,126 +41,39 @@ DEFAULT_CONFIG = {
     }
 }
 
-def load_client_config(client_id: str) -> Dict:
-    """Load client configuration from mcp_recipients.json."""
-    try:
-        # Try to find mcp_recipients.json in current directory or parent directories
-        current_dir = Path.cwd()
-        while current_dir.parent != current_dir:
-            config_path = current_dir / "mcp_recipients.json"
-            if config_path.exists():
-                with open(config_path) as f:
-                    config = json.load(f)
-                    if config.get("my_id") == client_id:
-                        message_config = config.get("message_config", {})
-                        return {
-                            "max_tokens": message_config.get("max_tokens", DEFAULT_CONFIG["max_tokens"]),
-                            "max_iterations": message_config.get("max_iterations", DEFAULT_CONFIG["max_iterations"]),
-                            "timeouts": {
-                                **DEFAULT_CONFIG["timeouts"],
-                                **message_config.get("timeouts", {})
-                            }
-                        }
-            current_dir = current_dir.parent
-    except Exception as e:
-        logger.warning(f"Error loading config for {client_id}: {e}")
-    
-    return DEFAULT_CONFIG
+# Global client tracking (in-memory)
+client_activity_tracking: Dict[str, Dict] = {}
 
-
-def load_callbacks_from_config() -> Dict[str, List[str]]:
-    """Load callback URLs from all *_recipients.json files."""
-    callbacks = {"connect": [], "disconnect": []}
-    
-    try:
-        # Find all *_recipients.json files in current directory
-        current_dir = Path.cwd()
-        for config_file in current_dir.glob("*_recipients.json"):
-            try:
-                with open(config_file) as f:
-                    config = json.load(f)
-                    file_callbacks = config.get("callbacks", {})
-                    
-                    # Add connect callbacks
-                    if "connect" in file_callbacks:
-                        if isinstance(file_callbacks["connect"], list):
-                            callbacks["connect"].extend(file_callbacks["connect"])
-                        else:
-                            callbacks["connect"].append(file_callbacks["connect"])
-                    
-                    # Add disconnect callbacks
-                    if "disconnect" in file_callbacks:
-                        if isinstance(file_callbacks["disconnect"], list):
-                            callbacks["disconnect"].extend(file_callbacks["disconnect"])
-                        else:
-                            callbacks["disconnect"].append(file_callbacks["disconnect"])
-                            
-                    logger.debug(f"Loaded callbacks from {config_file.name}: {file_callbacks}")
-                    
-            except Exception as e:
-                logger.warning(f"Error loading callbacks from {config_file}: {e}")
-    
-    except Exception as e:
-        logger.warning(f"Error scanning for callback configs: {e}")
-    
-    # Remove duplicates while preserving order
-    callbacks["connect"] = list(dict.fromkeys(callbacks["connect"]))
-    callbacks["disconnect"] = list(dict.fromkeys(callbacks["disconnect"]))
-    
-    logger.info(f"Loaded callbacks - Connect: {len(callbacks['connect'])}, Disconnect: {len(callbacks['disconnect'])}")
-    return callbacks
-
-
-async def fire_callbacks(event_type: str, payload: Dict) -> None:
-    """Fire HTTP callbacks for the given event type."""
-    callbacks = load_callbacks_from_config()
-    urls = callbacks.get(event_type, [])
-    
-    if not urls:
-        logger.debug(f"No callbacks configured for event: {event_type}")
+def update_client_activity(recipients_config: Dict, queue_backend: Optional[QueueBackend] = None) -> None:
+    """Update client activity tracking from required recipients_config."""
+    client_id = recipients_config.get("my_sender_id")
+    if not client_id:
         return
     
-    logger.info(f"Firing {len(urls)} callback(s) for event: {event_type}")
+    # Extract client info from config
+    client_info = {
+        "client_id": client_id,
+        "name": recipients_config.get("my_name", client_id),
+        "description": recipients_config.get("my_description", ""),
+        "clientType": recipients_config.get("clientType", "agent by IDE"),
+        "last_seen": datetime.now().isoformat(),
+        "messages_in_queue": 0  # Will be updated below
+    }
     
-    # Fire callbacks concurrently with retries
-    tasks = []
-    for url in urls:
-        task = asyncio.create_task(fire_single_callback(url, payload, event_type))
-        tasks.append(task)
+    # Update messages in queue count
+    if queue_backend and hasattr(queue_backend, 'queues'):
+        queue_messages = queue_backend.queues.get(client_id, [])
+        client_info["messages_in_queue"] = len(queue_messages)
     
-    # Wait for all callbacks to complete (don't block the main flow)
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+    # Store in global tracking
+    client_activity_tracking[client_id] = client_info
+
+# Configuration management removed - now handled by clients
+
+# File reading and callback functions removed - unified client approach means no server-side file I/O
 
 
-async def fire_single_callback(url: str, payload: Dict, event_type: str) -> None:
-    """Fire a single HTTP callback with retries."""
-    max_retries = 3
-    timeout_seconds = 5.0
-    retry_delays = [1.0, 2.0, 4.0]  # Exponential backoff
-    
-    for attempt in range(max_retries):
-        try:
-            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-                response = await client.post(url, json=payload)
-                response.raise_for_status()
-                
-                logger.info(f"✅ Callback success: {event_type} -> {url} (attempt {attempt + 1})")
-                return  # Success, exit retry loop
-                
-        except httpx.TimeoutException:
-            logger.warning(f"⏰ Callback timeout: {event_type} -> {url} (attempt {attempt + 1}/{max_retries})")
-        except httpx.HTTPStatusError as e:
-            logger.warning(f"🔴 Callback HTTP error: {event_type} -> {url} - Status {e.response.status_code} (attempt {attempt + 1}/{max_retries})")
-        except Exception as e:
-            logger.warning(f"❌ Callback error: {event_type} -> {url} - {str(e)} (attempt {attempt + 1}/{max_retries})")
-        
-        # Wait before retry (except on last attempt)
-        if attempt < max_retries - 1:
-            await asyncio.sleep(retry_delays[attempt])
-    
-    # All retries failed
-    logger.error(f"💥 Callback failed after {max_retries} attempts: {event_type} -> {url}")
+# Callback functionality removed - unified client approach
 
 
 def format_message_log(action: str, sender_id: str, recipient_id: str, message: str) -> str:
@@ -171,26 +86,21 @@ CONTENT:
 {message}
 {"=" * 80}"""
 
+# Client type detection removed - all clients treated uniformly
+
+# Removed format_ide_client_identity - no longer needed with unified approach
+
+# External client formatting removed - unified approach
+
 class MessagingServer:
     """Core stateless messaging server for client-to-client communication."""
     
     def __init__(self, queue_backend: Optional[QueueBackend] = None) -> None:
         self.queue_backend = queue_backend or InMemoryQueueBackend()
         logger.info(f"MessagingServer initialized with {type(self.queue_backend).__name__}")
-        self.client_configs: Dict[str, Dict] = {}
-    
-    def get_client_config(self, client_id: str) -> Dict:
-        """Get or load client configuration."""
-        if client_id not in self.client_configs:
-            self.client_configs[client_id] = load_client_config(client_id)
-        return self.client_configs[client_id]
     
     async def send_message(self, sender_id: str, recipient_id: str, content: str) -> str:
         """Send a message from sender to recipient."""
-        # Get sender's configuration
-        config = self.get_client_config(sender_id)
-        
-        # Note: max_tokens and max_iterations checks will be implemented in the future
         
         # Cleanup expired messages before processing
         await self.queue_backend.cleanup_expired_messages()
@@ -225,9 +135,8 @@ class MessagingServer:
     
     async def send_message_and_wait(self, sender_id: str, recipient_id: str, content: str) -> str:
         """Send a message and wait for a response (blocking call)."""
-        # Get sender's configuration
-        config = self.get_client_config(sender_id)
-        timeout = config["timeouts"]["send_message_and_wait"]
+        # Use default timeout
+        timeout = DEFAULT_CONFIG["timeouts"]["send_message_and_wait"]
         
         # First, send the message
         send_result = await self.send_message(sender_id, recipient_id, content)
@@ -251,66 +160,133 @@ class MessagingServer:
         else:
             return f"⏰ **Timeout**: No response received within {timeout} seconds"
     
-    async def get_messages(self, client_id: str) -> str:
-        """Get and remove all messages for a client, formatted as markdown."""
-        # Get client's configuration
-        config = self.get_client_config(client_id)
-        timeout = config["timeouts"]["get_messages"]
+    async def send_message_without_waiting(self, sender_id: str, recipients: List[str], messages: List[str]) -> str:
+        """Send messages (fire and forget) to multiple recipients and return any pending messages for sender."""
+        # Validate inputs
+        if not recipients:
+            return "❌ **Error**: At least one recipient must be specified"
+        
+        if not messages:
+            return "❌ **Error**: At least one message must be specified"
+        
+        if len(messages) != len(recipients):
+            return f"❌ **Error**: Number of messages ({len(messages)}) must match number of recipients ({len(recipients)})"
+        
+        # Send messages to all recipients
+        send_results = []
+        failed_sends = []
+        
+        for recipient_id, content in zip(recipients, messages):
+            send_result = await self.send_message(sender_id, recipient_id, content)
+            
+            if send_result.startswith("❌") or send_result.startswith("⚠️"):
+                failed_sends.append(f"  - **{recipient_id}**: {send_result}")
+            else:
+                send_results.append(f"  - **{recipient_id}**: ✅ Message sent")
+        
+        # Format results
+        total_recipients = len(recipients)
+        successful_sends = len(send_results)
+        
+        result_parts = [
+            f"📡 **Message Delivery Complete** ({successful_sends}/{total_recipients} successful)",
+            ""
+        ]
+        
+        if send_results:
+            result_parts.extend(["**✅ Successful sends:**"] + send_results + [""])
+        
+        if failed_sends:
+            result_parts.extend(["**❌ Failed sends:**"] + failed_sends + [""])
+        
+        # Get any pending messages for the sender (non-blocking)
+        await self.queue_backend.cleanup_expired_messages()
+        pending_messages_list = await self.queue_backend.get_messages(sender_id, pop=True)
+        
+        if pending_messages_list:
+            # Format both send results and pending messages
+            pending_messages = self._format_messages_as_markdown(sender_id, pending_messages_list)
+            result_parts.extend(["---", "", pending_messages])
+        else:
+            # Just the send results
+            result_parts.extend(["💡 **Tip**: Use `get_messages` to check for responses later."])
+        
+        return "\n".join(result_parts)
+    
+    async def get_messages(self, sender_id: str) -> str:
+        """Get and remove all messages for a sender, formatted as markdown."""
+        # Use default timeout
+        timeout = DEFAULT_CONFIG["timeouts"]["get_messages"]
         
         # Cleanup expired messages before processing
         await self.queue_backend.cleanup_expired_messages()
         
         # Validate input
-        if not client_id.strip():
-            return "❌ **Error**: Client ID cannot be empty"
+        if not sender_id.strip():
+            return "❌ **Error**: Sender ID cannot be empty"
         
         # Get messages from queue backend
-        messages = await self.queue_backend.get_messages(client_id, pop=True)
+        messages = await self.queue_backend.get_messages(sender_id, pop=True)
         
         if not messages:
             # No messages found - block for configured timeout
-            logger.debug(f"No messages found for {client_id}, waiting {timeout} seconds...")
+            logger.debug(f"No messages found for {sender_id}, waiting {timeout} seconds...")
             
-            message_arrived = await self.queue_backend.wait_for_new_message(client_id, timeout)
+            message_arrived = await self.queue_backend.wait_for_new_message(sender_id, timeout)
             
             if message_arrived:
                 # Get the new messages that arrived
-                messages = await self.queue_backend.get_messages(client_id, pop=True)
+                messages = await self.queue_backend.get_messages(sender_id, pop=True)
                 if messages:
-                    logger.info(f"Retrieved {len(messages)} messages for {client_id} after waiting")
-                    return self._format_messages_as_markdown(client_id, messages)
+                    logger.info(f"Retrieved {len(messages)} messages for {sender_id} after waiting")
+                    return self._format_messages_as_markdown(sender_id, messages)
                 else:
                     return "📭 **No messages** for you right now."
             else:
-                logger.debug(f"Timeout waiting for messages for {client_id}")
-                return "📭 **No messages** for you right now."
+                logger.debug(f"Timeout waiting for messages for {sender_id}")
+                return "📭 **No messages** for you right now.\n\n💡 **Tip:** Be sure you are using your sender_id (`my_sender_id`) from your `mcp_recipients.json` file, and try again."
         
-        logger.info(f"Retrieved and popped {len(messages)} messages for {client_id}")
-        
-        return self._format_messages_as_markdown(client_id, messages)
+        logger.info(f"Retrieved and popped {len(messages)} messages for {sender_id}")
+        return self._format_messages_as_markdown(sender_id, messages)
     
-    def _format_messages_as_markdown(self, client_id: str, messages: List[Message]) -> str:
-        """Format messages as markdown."""
-        message_count = len(messages)
-        markdown_parts = [f"## 📨 Messages for `{client_id}` ({message_count} message{'s' if message_count != 1 else ''})", ""]
+    def _format_messages_as_markdown(self, sender_id: str, messages: List[Message]) -> str:
+        """Format a list of messages as markdown."""
+        if not messages:
+            return "📭 **No messages** for you right now."
+        
+        # Format each message
+        message_parts = [
+            f"📬 **{len(messages)} message{'s' if len(messages) > 1 else ''} for `{sender_id}`:**\n"
+        ]
         
         for msg in messages:
             relative_time = format_relative_time(msg.timestamp)
-            markdown_parts.extend([
-                f"**From:** `{msg.from_client_id}`  ",
-                f"**Time:** {relative_time}  ",
-                f"**Message:** {msg.content}",
-                "",
-                "---",
-                ""
-            ])
+            message_parts.append(f"**From:** `{msg.from_client_id}` ({relative_time})\n{msg.content}\n")
         
-        return "\n".join(markdown_parts)
+        return "\n".join(message_parts)
     
     def checkin_client(self, client_id: str, name: str, capabilities: str) -> str:
         """Client checkin (for future features, currently just logs)."""
         if not client_id.strip():
             return "❌ **Error**: Client ID cannot be empty"
+        
+        # Create/update client info in tracking
+        client_info = {
+            "client_id": client_id,
+            "name": name,
+            "description": capabilities,
+            "clientType": "checked-in client",
+            "last_seen": datetime.now().isoformat(),
+            "messages_in_queue": 0  # Will be updated below
+        }
+        
+        # Update messages in queue count
+        if hasattr(self.queue_backend, 'queues'):
+            queue_messages = self.queue_backend.queues.get(client_id, [])
+            client_info["messages_in_queue"] = len(queue_messages)
+        
+        # Store in global tracking
+        client_activity_tracking[client_id] = client_info
         
         logger.info(f"Client checkin - ID: {client_id}, Name: {name}, Capabilities: {capabilities}")
         
@@ -327,7 +303,7 @@ messaging_server = MessagingServer(
 # Initialize FastMCP with HTTP Streamable transport
 mcp = FastMCP(
     name="messaging-server",
-    description="MCP server for client-to-client messaging using HTTP Streamable transport",
+    description="MCP server for client-to-client messaging using HTTP Streamable transport. Messaging capabilities are determined by each client's mcp_recipients list, which defines available recipients and client identity. All messaging tools require recipients_config parameter for client activity tracking and proper message routing.",
     stateless_http=True,  # Use stateless HTTP for Streamable HTTP transport
     json_response=False   # Use SSE streaming format for richer client experience
 )
@@ -338,23 +314,44 @@ async def checkin_client(client_id: str, name: str, capabilities: str = "Generic
     """Check in as a client to announce your presence.
     
     Args:
-        client_id: Your unique client ID (read from 'my_id' field in your local mcp_recipients.json file)
-        name: Display name for this client instance
+        client_id: Your unique sender ID. **This should be the `my_sender_id` field from your local `mcp_recipients.json` file. Do not use an arbitrary value.**
+        name: Display name for this client instance. **This should match the `my_name` field from your local `mcp_recipients.json` file.**
         capabilities: Description of client capabilities (default: Generic project description)
         
     Returns:
         Confirmation of successful checkin
+    
+    **Note:** For correct identity and attribution, always use the values from your configured `mcp_recipients.json` file. If you are unsure, ask your project lead for the correct configuration.
     """
-    return messaging_server.checkin_client(client_id, name, capabilities)
+    # Update client activity tracking
+    result = messaging_server.checkin_client(client_id, name, capabilities)
+    
+    # Store activity tracking info
+    client_activity_tracking[client_id] = {
+        "client_id": client_id,
+        "name": name,
+        "capabilities": capabilities,
+        "last_checkin": datetime.now().isoformat(),
+        "message_count": len(messaging_server.queue_backend.queues.get(client_id, []))
+    }
+    
+    return result
 
 
-@mcp.tool()
 async def send_message_and_wait(sender_id: str, recipient_id: str, message: str, expectation: str = "response_expected") -> str:
-    """Send a message and wait for a response (blocking conversation mode).
+    """Send message and wait for immediate response. **Use only when you need to block and wait.**
+    
+    **🚨 IMPORTANT**: This blocks for 3 minutes waiting for response! 
+    **💡 For most cases, use send_message_without_waiting instead.**
+    
+    **When to use:**
+    - ✅ Need to wait for immediate response before continuing
+    - ✅ Urgent situations requiring immediate reply
+    - ❌ DO NOT make rapid multiple calls (use fire-and-forget instead)
     
     Args:
-        sender_id: Your client ID (read from 'my_id' field in your local mcp_recipients.json file)
-        recipient_id: The recipient's client ID (choose from 'recipients' section in your local mcp_recipients.json file)
+        sender_id: Your client ID
+        recipient_id: The recipient's client ID
         message: The message content to send
         expectation: Response expectation - one of:
             - "response_expected": I expect a response via send_message_and_wait
@@ -383,52 +380,117 @@ async def send_message_and_wait(sender_id: str, recipient_id: str, message: str,
 
 
 @mcp.tool()
-async def get_messages(client_id: str) -> str:
-    """Get your pending messages (messages are removed from queue after retrieval). Blocks for 60 seconds if no messages.
+async def send_message_without_waiting(sender_id: str, recipients: List[Dict[str, str]], recipients_config: Dict) -> str:
+    """Send messages to one or more recipients instantly (fire & forget).
+    
+    **🔄 WORKFLOW**: Send messages → then call get_messages to check for replies.
+    
+    **⚠️ IMPORTANT**: All IDs MUST come from your local `mcp_recipients.json` file:
+    - sender_id: Use the `my_id` field from your file
+    - recipient IDs: Use only IDs listed in your `recipients` section
+    
+    **Features:**
+    - ✅ **INSTANT** - No blocking, immediate return
+    - ✅ **SCALABLE** - Send to one or more recipients in single call
+    - ✅ **EFFICIENT** - Fast messaging for all use cases
+    
+    **Next Step:** Call get_messages to check for responses from recipients.
     
     Args:
-        client_id: Your client ID (read from 'my_id' field in your local mcp_recipients.json file)
+        sender_id: Your client ID (MUST be the `my_id` from your local `mcp_recipients.json`)
+        recipients: List of recipient-message mappings, where each item is {"id": recipient_id, "message": message_content}. 
+                   The recipient_id MUST exist in your local `mcp_recipients.json` file's recipients section.
+        recipients_config: Configuration for the sender
+        
+    Returns:
+        Send results showing success/failure for each recipient, plus any pending messages for you
+        
+    Examples:
+        - Multiple recipients: recipients=[{"id": "alice", "message": "Review code"}, {"id": "bob", "message": "Check UI"}]
+        - Single recipient: recipients=[{"id": "alice", "message": "Quick question about the API"}]
+        
+    Note: Always verify that recipient IDs exist in your local `mcp_recipients.json` before sending messages.
+    """
+    # Update client activity tracking
+    update_client_activity(recipients_config, messaging_server.queue_backend)
+    
+    # Extract recipient IDs and messages from the mappings
+    recipient_ids = [r["id"] for r in recipients]
+    messages = [r["message"] for r in recipients]
+    
+    result = await messaging_server.send_message_without_waiting(sender_id, recipient_ids, messages)
+    return result
+
+
+@mcp.tool()
+async def get_messages(sender_id: str, recipients_config: Dict) -> str:
+    """Get any pending messages for this sender.
+    
+    Args:
+        sender_id: Your sender ID (MUST be the `my_sender_id` from your local `mcp_recipients.json`)
+        recipients_config: Configuration from your local `mcp_recipients.json`
         
     Returns:
         Your messages formatted in markdown (blocks up to 60 seconds waiting for new messages)
+        
+    Note: If you're not receiving expected messages, verify you're using the correct `my_sender_id` 
+    from your `mcp_recipients.json` file, and try again.
     """
-    return await messaging_server.get_messages(client_id)
+    # Update client activity tracking
+    update_client_activity(recipients_config, messaging_server.queue_backend)
+    
+    # Get messages from server
+    return await messaging_server.get_messages(sender_id)
 
 
 @mcp.tool()
-async def get_my_identity() -> str:
-    """Get information about how to find your client identity and available recipients.
+async def get_my_identity(recipients_config: Dict) -> str:
+    """Get information about your identity and available recipients.
     
     Returns:
-        Instructions on using mcp_recipients.json file or a similar tool to get your list of mcp recipients
+        Instructions for finding your configuration
     """
-    # Add 30 second delay to test blocking behavior
-    logger.info("get_my_identity called - starting 30 second wait...")
-    await asyncio.sleep(30)
-    logger.info("get_my_identity - 30 second wait completed, returning response")
+    # Update client activity tracking
+    update_client_activity(recipients_config, messaging_server.queue_backend)
     
-    return """## 🆔 Client Identity Information
+    return """## 🆔 Your Messaging Identity & Recipients
 
-**Check your local `mcp_recipients.json` file** for:
+## Your Configuration
+Please check your local `mcp_recipients.json` file in your project root folder for:
+- **Your sender ID** (my_sender_id field) - This is YOUR unique identifier
+- **Available recipients** (recipients section) - These are the IDs you can send messages to
 
-- **Your Client ID**: Found in the `"my_id"` field
-- **Available Recipients**: Listed in the `"recipients"` section
-- **Server Information**: Connection details in `"server_info"`
+## Local File Location
+Look for `mcp_recipients.json` in your project directory.
 
-This file should be in the root directory of your project and contains all the client IDs and recipient information needed for messaging."""
+## Usage
+Use your my_sender_id for all messaging operations. This is YOUR unique identifier that 
+distinguishes you from other senders and recipients.
+
+## Example mcp_recipients.json
+```json
+{
+    "my_sender_id": "your_unique_id_here",
+    "recipients": {
+        "recipient1_id": {
+            "name": "Recipient 1",
+            "description": "Description of recipient 1"
+        }
+    }
+}
+```
+
+Remember: Always use your my_sender_id from this file - do not generate arbitrary IDs."""
 
 
-@mcp.tool()
-async def get_active_sessions() -> str:
-    """Get information about active MCP sessions and connections.
+
+async def _get_active_sessions_internal() -> str:
+    """Internal function to get information about active messaging clients.
     
     Returns:
-        Information about current active sessions, queue statistics, and server status
+        JSON information about recently active messaging clients including last seen times
     """
     try:
-        # Get session information from FastMCP (if available)
-        session_info = []
-        
         # Get queue statistics
         if hasattr(messaging_server.queue_backend, 'get_queue_stats'):
             queue_stats = messaging_server.queue_backend.get_queue_stats()
@@ -439,126 +501,77 @@ async def get_active_sessions() -> str:
                 "active_waiters": len(getattr(messaging_server.queue_backend, 'notification_events', {}))
             }
         
-        # Get active client IDs from queues
-        active_clients = list(getattr(messaging_server.queue_backend, 'queues', {}).keys())
-        waiting_clients = list(getattr(messaging_server.queue_backend, 'notification_events', {}).keys())
+        # Update message counts for all queues, even if client isn't tracked
+        messaging_clients = []
+        for client_id, queue in messaging_server.queue_backend.queues.items():
+            client_info = client_activity_tracking.get(client_id, {
+                "client_id": client_id,
+                "name": client_id,
+                "description": "Client with messages in queue",
+                "clientType": "untracked client",
+                "last_seen": datetime.now().isoformat()
+            })
+            client_info["messages_in_queue"] = len(queue)
+            messaging_clients.append(client_info)
         
-        # Format response
-        response_parts = [
-            "## 🌐 MCP Server Session Status",
-            "",
-            f"**Server Name:** {mcp.name}",
-            f"**Transport:** HTTP Streamable (stateless)",
-            "",
-            "### 📊 Queue Statistics",
-            f"- **Active Queues:** {queue_stats['total_queues']}",
-            f"- **Total Messages:** {queue_stats['total_messages']}",
-            f"- **Waiting Clients:** {queue_stats.get('active_waiters', 0)}",
-            "",
-        ]
+        # Add tracked clients that don't have queues
+        for client_id, client_info in client_activity_tracking.items():
+            if client_id not in messaging_server.queue_backend.queues:
+                client_info["messages_in_queue"] = 0
+                messaging_clients.append(client_info)
         
-        if active_clients:
-            response_parts.extend([
-                "### 📝 Active Client Queues",
-                ""
-            ])
-            for client_id in active_clients:
-                queue_size = len(messaging_server.queue_backend.queues.get(client_id, []))
-                response_parts.append(f"- **{client_id}**: {queue_size} message(s)")
-            response_parts.append("")
+        # Create the response structure with total_messages at root level for frontend compatibility
+        response = {
+            "messagingClients": messaging_clients,
+            "queueStats": queue_stats,
+            "total_messages": queue_stats["total_messages"]  # Add total_messages at root level
+        }
         
-        if waiting_clients:
-            response_parts.extend([
-                "### ⏳ Clients Waiting for Messages",
-                ""
-            ])
-            for client_id in waiting_clients:
-                response_parts.append(f"- **{client_id}**: Blocking for new messages")
-            response_parts.append("")
-        
-        if not active_clients and not waiting_clients:
-            response_parts.extend([
-                "### 💤 No Active Sessions",
-                "",
-                "No clients currently have active message queues or are waiting for messages.",
-                ""
-            ])
-        
-        response_parts.extend([
-            "### ℹ️ Session Notes",
-            "",
-            "- **HTTP Streamable**: Sessions are managed by FastMCP automatically",
-            "- **Stateless Design**: Session IDs are handled transparently", 
-            "- **Queue Cleanup**: Expired messages are cleaned up automatically",
-            "- **Message Expiration**: 5 minutes (300 seconds)"
-        ])
-        
-        return "\n".join(response_parts)
+        return json.dumps(response, indent=2)
         
     except Exception as e:
         logger.error(f"Error getting session info: {e}")
-        return f"❌ **Error**: Could not retrieve session information: {str(e)}"
+        error_msg = f"❌ **Error**: Could not retrieve session information: {str(e)}"
+        return error_msg
 
 
-@mcp.custom_route("/api/sessions", methods=["GET"])
+@mcp.custom_route("/api/sessions", methods=["GET", "OPTIONS"])
 async def get_sessions_json(request):
     """REST endpoint for session statistics - returns pure JSON for normal REST clients."""
-    try:
-        # Get queue statistics (same logic as MCP tool but return JSON)
-        if hasattr(messaging_server.queue_backend, 'get_queue_stats'):
-            queue_stats = messaging_server.queue_backend.get_queue_stats()
-        else:
-            queue_stats = {
-                "total_queues": len(getattr(messaging_server.queue_backend, 'queues', {})),
-                "total_messages": sum(len(msgs) for msgs in getattr(messaging_server.queue_backend, 'queues', {}).values()),
-                "active_waiters": len(getattr(messaging_server.queue_backend, 'notification_events', {}))
-            }
-        
-        # Get active client IDs from queues
-        active_clients = list(getattr(messaging_server.queue_backend, 'queues', {}).keys())
-        waiting_clients = list(getattr(messaging_server.queue_backend, 'notification_events', {}).keys())
-        
-        # Build client details
-        client_details = {}
-        for client_id in active_clients:
-            queue_size = len(messaging_server.queue_backend.queues.get(client_id, []))
-            client_details[client_id] = {
-                "queue_size": queue_size,
-                "status": "has_messages"
-            }
-        
-        for client_id in waiting_clients:
-            if client_id not in client_details:
-                client_details[client_id] = {
-                    "queue_size": 0,
-                    "status": "waiting_for_messages"
-                }
-        
-        # Return clean JSON structure using JSONResponse
-        data = {
-            "server_name": mcp.name,
-            "transport": "HTTP Streamable (stateless)",
-            "timestamp": datetime.now().isoformat(),
-            "stats": {
-                "active_queues": queue_stats['total_queues'],
-                "total_messages": queue_stats['total_messages'],
-                "waiting_clients": queue_stats.get('active_waiters', 0)
-            },
-            "clients": client_details,
-            "session_notes": {
-                "session_management": "FastMCP automatic",
-                "design": "stateless",
-                "cleanup": "automatic",
-                "message_expiration_seconds": 300
-            }
+    # Handle CORS preflight requests
+    if request.method == "OPTIONS":
+        headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization"
         }
+        return JSONResponse(content={}, headers=headers)
+    
+    try:
+        # Call our internal get_active_sessions function
+        result = await _get_active_sessions_internal()
         
-        return JSONResponse(content=data)
+        # Parse the JSON result and return as JSONResponse with CORS headers
+        data = json.loads(result)
+        headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization"
+        }
+        return JSONResponse(content=data, headers=headers)
         
     except Exception as e:
         logger.error(f"Error getting session JSON: {e}")
         error_data = {"error": f"Could not retrieve session information: {str(e)}"}
-        return JSONResponse(content=error_data, status_code=500)
+        headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization"
+        }
+        return JSONResponse(content=error_data, status_code=500, headers=headers)
+
+
+# REST endpoints for client registration removed - now handled by client-side parameter injection
 
 
 def main() -> None:
@@ -587,7 +600,7 @@ def main() -> None:
     
     logger.info(f"Starting MCP messaging server on {args.host}:{args.port}")
     logger.info(f"Queue backend: {type(messaging_server.queue_backend).__name__}")
-    logger.info("Tools available: checkin_client, send_message, send_message_and_wait, get_messages, get_my_identity, get_active_sessions")
+    logger.info("Tools available: checkin_client, send_message_without_waiting, get_messages, get_my_identity")
     
     # Start the server with HTTP Streamable transport
     # Configure host and port via FastMCP settings

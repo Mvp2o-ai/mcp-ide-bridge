@@ -15,7 +15,7 @@
     }
   },
   "server_info": {
-    "url": "http://localhost:8123",
+    "url": "http://localhost:8111/mcp/",
     "transport": "http_streamable",
     "health_endpoint": "/api/mcp/health",
     "sse_endpoint": "/api/mcp/sse"

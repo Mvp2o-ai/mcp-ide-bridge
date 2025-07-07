@@ -36,7 +36,7 @@ This client serves as both a **testing tool** for the messaging server and a **r
 
 **Install dependencies:**
 ```bash
-pip install -e .
+pip install -r requirements.txt
 ```
 
 **Set up environment (optional):**
@@ -111,7 +111,7 @@ The client can interact with all MCP IDE Bridge tools:
 | Tool | Purpose | Example |
 |------|---------|---------|
 | `checkin_client` | Register presence | "Check in as alice_cursor" |
-| `send_message_and_wait` | Send message & wait | "Send message to bob_vscode" |
+| `send_message_without_waiting` | Send message (fire & forget) | "Send message to bob_vscode" |
 | `get_messages` | Retrieve messages | "Get messages for alice_cursor" |
 | `get_my_identity` | Get configuration help | "What's my identity?" |
 | `get_active_sessions` | View active connections | "Show active sessions" |
